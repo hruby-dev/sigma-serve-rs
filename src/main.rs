@@ -90,7 +90,7 @@ fn handle_client(mut stream: TcpStream, args: &Args) -> std::io::Result<()> {
     };
 
     if !full_path.starts_with(&args.root) {
-        return send_response(&mut stream, "HTTP/1.1 403 FORBIDDEN", "Forbidden");
+        return send_not_found(&mut stream, args);
     }
 
     match fs::read_to_string(&full_path) {
