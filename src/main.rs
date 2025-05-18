@@ -5,9 +5,22 @@ use std::{
     sync::Arc,
 };
 
+use log::{error, info};
+
 fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:8080")?;
-    println!("sigma-serve-rs started gooning files on http://127.0.0.1:8080");
+    let _ = simplelog::TermLogger::init(
+        if cfg!(debug_assertions) {
+            log::LevelFilter::Info
+        } else {
+            log::LevelFilter::Debug
+        },
+        simplelog::Config::default(),
+        simplelog::TerminalMode::Mixed,
+        simplelog::ColorChoice::Auto,
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:8081")?;
+    info!("sigma-serve-rs started serving files on http://127.0.0.1:8081");
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -22,11 +35,11 @@ fn main() -> std::io::Result<()> {
                 let root_dir = Arc::clone(&root_dir);
                 std::thread::spawn(move || {
                     if let Err(e) = handle_client(stream, &root_dir) {
-                        eprintln!("Error handling client: {}", e);
+                        error!("client handler errored: {}", e);
                     }
                 });
             }
-            Err(e) => eprintln!("Connection failed: {}", e),
+            Err(e) => error!("failed to accept connection: {}", e),
         }
     }
     Ok(())
@@ -44,7 +57,11 @@ fn handle_client(mut stream: TcpStream, root_dir: &str) -> std::io::Result<()> {
     let path = parts.next().unwrap_or("/");
 
     if method != "GET" {
-        return send_response(&mut stream, "HTTP/1.1 405 METHOD NOT ALLOWED", "Method Not Allowed");
+        return send_response(
+            &mut stream,
+            "HTTP/1.1 405 METHOD NOT ALLOWED",
+            "Method Not Allowed",
+        );
     }
 
     let requested = if path == "/" {
@@ -63,7 +80,8 @@ fn handle_client(mut stream: TcpStream, root_dir: &str) -> std::io::Result<()> {
         Ok(contents) => send_response(&mut stream, "HTTP/1.1 200 OK", &contents),
         Err(_) => {
             let fallback_path = format!("{}/404.html", root_dir);
-            let fallback = fs::read_to_string(&fallback_path).unwrap_or_else(|_| "404 Not Found".to_string());
+            let fallback =
+                fs::read_to_string(&fallback_path).unwrap_or_else(|_| "404 Not Found".to_string());
             send_response(&mut stream, "HTTP/1.1 404 NOT FOUND", &fallback)
         }
     }
