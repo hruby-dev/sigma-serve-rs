@@ -76,7 +76,7 @@ fn main() -> std::io::Result<()> {
     let args = Arc::new(args);
 
     let listener = TcpListener::bind(&args.bind)?;
-    info!("sigma-serve-rs started serving files on {}", args.bind);
+    info!("sigma-serve started serving files on {}", args.bind);
 
     loop {
         let Ok((mut stream, addr)) = listener.accept() else {
