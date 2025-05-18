@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    path::{PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -21,6 +21,42 @@ pub struct Args {
     /// suffix to append to requested file names
     #[arg(short, long, default_value = ".html")]
     suffix: String,
+}
+
+struct Request {
+    pub path: String,
+    pub raw_path: String,
+    pub method: String,
+}
+
+struct Response {
+    pub status_code: i32,
+    pub status_message: String,
+    pub body: Vec<u8>,
+}
+
+impl Response {
+    pub fn new(status_code: i32, status_message: impl Into<String>, body: Vec<u8>) -> Self {
+        Self {
+            status_code,
+            status_message: status_message.into(),
+            body,
+        }
+    }
+
+    pub fn write(&self, stream: &mut TcpStream) -> io::Result<()> {
+        stream.write_all(
+            format!(
+                "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n\r\n",
+                self.status_code,
+                self.status_message,
+                self.body.len()
+            )
+            .as_bytes(),
+        )?;
+        stream.write_all(&self.body)?;
+        stream.flush()
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -42,81 +78,117 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&args.bind)?;
     info!("sigma-serve-rs started serving files on {}", args.bind);
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let args = Arc::clone(&args);
-                std::thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, &args) {
-                        error!("client handler error: {}", e);
+    loop {
+        let Ok((mut stream, addr)) = listener.accept() else {
+            continue;
+        };
+
+        let args = Arc::clone(&args);
+        std::thread::spawn(move || {
+            let request = match parse_request(&mut stream) {
+                Ok(request) => request,
+                Err(e) => {
+                    match e.kind() {
+                        io::ErrorKind::ConnectionReset => return, // can also mean not a HTTP connection (not a relevant error so not logged)
+                        io::ErrorKind::InvalidData => return, // invalid UTF-8 (probably better to return a 400 Bad Request but eh)
+                        _ => {
+                            error!("request parser error: {e}");
+                            return;
+                        }
                     }
-                });
-            }
-            Err(e) => error!("failed to accept connection: {}", e),
-        }
+                }
+            };
+
+            let response = match prepare_response(&request, &args) {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("client handler error: {e}");
+                    Response::new(
+                        500,
+                        "Internal Server Error",
+                        "500 Internal Server Error".as_bytes().to_vec(),
+                    )
+                }
+            };
+
+            info!(
+                "{:?} - \"{} {}\" - {}",
+                addr.ip(),
+                request.method,
+                request.raw_path,
+                response.status_code
+            );
+
+            let _ = response.write(&mut stream);
+        });
     }
-    Ok(())
 }
 
-fn handle_client(mut stream: TcpStream, args: &Args) -> std::io::Result<()> {
-    let buf_reader = BufReader::new(&stream);
+fn parse_request(stream: &mut TcpStream) -> std::io::Result<Request> {
+    let buf_reader = BufReader::new(stream);
     let request_line = match buf_reader.lines().next().transpose()? {
         Some(line) => line,
-        None => return Ok(()),
+        None => return Err(io::ErrorKind::ConnectionReset.into()),
     };
 
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
 
-    if method != "GET" {
-        return send_response(
-            &mut stream,
-            "HTTP/1.1 405 METHOD NOT ALLOWED",
+    Ok(Request {
+        path: urlencoding::decode(path)
+            .map_err(|_| io::ErrorKind::InvalidData)?
+            .to_string(),
+        raw_path: path.to_string(),
+        method: method.to_string(),
+    })
+}
+
+fn prepare_response(request: &Request, args: &Args) -> std::io::Result<Response> {
+    if request.method != "GET" {
+        return Ok(Response::new(
+            405,
             "Method Not Allowed",
-        );
+            "405 Method Not Allowed".as_bytes().to_vec(),
+        ));
     }
 
-    let requested = if path == "/" {
+    let requested = if request.path == "/" {
         PathBuf::from("index.html")
     } else {
-        let decoded =match urlencoding::decode(path.trim_start_matches('/')) {
-            Ok(decoded) => decoded,
-            Err(_) => {
-                return send_response(&mut stream, "HTTP/1.1 400 BAD REQUEST", "");
-            },
-        };
+        let decoded =
+            match urlencoding::decode(request.path.strip_prefix('/').unwrap_or(&request.path)) {
+                Ok(decoded) => decoded,
+                Err(_) => {
+                    return Ok(Response::new(
+                        400,
+                        "Bad Request",
+                        "400 Bad Request".as_bytes().to_vec(),
+                    ));
+                }
+            };
         PathBuf::from(format!("{}{}", decoded, args.suffix))
     };
 
     let full_path = match fs::canonicalize(args.root.join(requested)) {
         Ok(full_path) => full_path,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return send_not_found(&mut stream, args),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(not_found(args)),
         Err(e) => return Err(e),
     };
 
     if !full_path.starts_with(&args.root) {
-        return send_not_found(&mut stream, args);
+        return Ok(not_found(args));
     }
 
-    match fs::read_to_string(&full_path) {
-        Ok(contents) => send_response(&mut stream, "HTTP/1.1 200 OK", &contents),
-        Err(_) => send_not_found(&mut stream, args),
-    }
+    Ok(match fs::read(&full_path) {
+        Ok(contents) => Response::new(200, "Ok", contents),
+        Err(_) => not_found(args),
+    })
 }
 
-fn send_not_found(stream: &mut TcpStream, args: &Args) -> std::io::Result<()> {
+fn not_found(args: &Args) -> Response {
     let fallback_path = args.root.join("404.html");
     let fallback =
         fs::read_to_string(&fallback_path).unwrap_or_else(|_| "404 Not Found".to_string());
-    send_response(stream, "HTTP/1.1 404 NOT FOUND", &fallback)
-}
-
-fn send_response(stream: &mut TcpStream, status_line: &str, body: &str) -> std::io::Result<()> {
-    let response = format!(
-        "{status_line}\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()
+    return Response::new(404, "Not Found", fallback.as_bytes().to_vec());
 }
