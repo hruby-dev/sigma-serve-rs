@@ -80,7 +80,13 @@ fn handle_client(mut stream: TcpStream, args: &Args) -> std::io::Result<()> {
     let requested = if path == "/" {
         PathBuf::from("index.html")
     } else {
-        PathBuf::from(format!("{}{}", path.trim_start_matches('/'), args.suffix))
+        let decoded =match urlencoding::decode(path.trim_start_matches('/')) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                return send_response(&mut stream, "HTTP/1.1 400 BAD REQUEST", "");
+            },
+        };
+        PathBuf::from(format!("{}{}", decoded, args.suffix))
     };
 
     let full_path = match fs::canonicalize(args.root.join(requested)) {
