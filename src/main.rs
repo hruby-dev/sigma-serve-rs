@@ -17,6 +17,10 @@ pub struct Args {
     #[arg(short, long, default_value = "localhost:8080")]
     /// what address and port pair to listen on
     bind: String,
+
+    /// suffix to append to requested file names
+    #[arg(short, long, default_value = ".html")]
+    suffix: String
 }
 
 fn main() -> std::io::Result<()> {
@@ -76,7 +80,7 @@ fn handle_client(mut stream: TcpStream, args: &Args) -> std::io::Result<()> {
     let requested = if path == "/" {
         PathBuf::from("index.html")
     } else {
-        PathBuf::from(format!("{}.html", path.trim_start_matches('/')))
+        PathBuf::from(format!("{}{}", path.trim_start_matches('/'), args.suffix))
     };
 
     let full_path = match fs::canonicalize(args.root.join(requested)) {
