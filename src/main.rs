@@ -2,25 +2,25 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    path::{self, PathBuf},
+    path::{PathBuf},
     sync::Arc,
 };
 
 use clap::Parser;
-use log::{debug, error, info};
+use log::{error, info};
 
 #[derive(Parser)]
 pub struct Args {
     /// which directory or file to serve
     root: PathBuf,
 
-    #[arg(short, long, default_value = "localhost:8080")]
+    #[arg(short, long, default_value = "localhost:8080", id = "ADDRESS:PORT")]
     /// what address and port pair to listen on
     bind: String,
 
     /// suffix to append to requested file names
     #[arg(short, long, default_value = ".html")]
-    suffix: String
+    suffix: String,
 }
 
 fn main() -> std::io::Result<()> {
@@ -95,7 +95,7 @@ fn handle_client(mut stream: TcpStream, args: &Args) -> std::io::Result<()> {
 
     match fs::read_to_string(&full_path) {
         Ok(contents) => send_response(&mut stream, "HTTP/1.1 200 OK", &contents),
-        Err(_) => send_not_found(&mut stream, args)
+        Err(_) => send_not_found(&mut stream, args),
     }
 }
 
