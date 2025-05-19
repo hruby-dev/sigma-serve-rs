@@ -7,3 +7,7 @@ description = "sigma-serve-rs is a simple, lightweight HTTP server written in Ru
 license = "MIT"
 
 [dependencies]
+clap = { version = "4.5.38", features = ["derive"] }
+log = "0.4.27"
+simplelog = "0.12.2"
+urlencoding = "2.1.3"
