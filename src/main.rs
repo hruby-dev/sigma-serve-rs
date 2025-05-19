@@ -11,7 +11,7 @@ use log::{error, info};
 
 #[derive(Parser)]
 pub struct Args {
-    /// which directory or file to serve
+    /// which directory to serve
     root: PathBuf,
 
     #[arg(short, long, default_value = "localhost:8080", id = "ADDRESS:PORT")]
