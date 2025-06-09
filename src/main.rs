@@ -11,14 +11,11 @@ use log::{error, info};
 
 #[derive(Parser)]
 pub struct Args {
-    /// which directory to serve
     root: PathBuf,
 
     #[arg(short, long, default_value = "localhost:8080", id = "ADDRESS:PORT")]
-    /// what address and port pair to listen on
     bind: String,
 
-    /// suffix to append to requested file names
     #[arg(short, long, default_value = ".html")]
     suffix: String,
 }
